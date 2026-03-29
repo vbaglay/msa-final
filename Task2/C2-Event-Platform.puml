@@ -1,0 +1,140 @@
+@startuml C2_Event_Platform_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("new", $bgColor="#438DD5", $fontColor="white", $borderColor="#2E6295", $legendText="Новый элемент To-Be")
+AddElementTag("transitional", $bgColor="#999999", $fontColor="white", $borderColor="#666666", $legendText="Переходный элемент")
+AddElementTag("monitoring", $bgColor="#2D882D", $fontColor="white", $borderColor="#1A5C1A", $legendText="Инструмент мониторинга")
+
+title GoFuture — C2 Event-Driven Platform с инструментами мониторинга
+
+' === СЕРВИСЫ-PRODUCERS ===
+System_Boundary(producers, "Domain Services (Producers)") {
+    Container(booking_svc, "Booking Service", "Python/Go", "BookingCreated, TripCompleted...")
+    Container(driver_svc, "Driver Service", "Python/Go", "DriverLocationUpdated, DriverStatusChanged...")
+    Container(pricing_svc, "Pricing Service", "Python/Go", "PriceQuoted, SurgeUpdated...")
+    Container(payments_svc, "Payments Service", "Python/Go", "PaymentCaptured, PaymentFailed...")
+    Container(payouts_svc, "Payouts Service", "Python/Go", "PayoutCompleted, PayoutFailed...")
+    Container(fraud_svc, "Fraud Service", "Python/Go", "FraudCheckCompleted, FraudAlertRaised...")
+}
+
+' === OUTBOX ===
+System_Boundary(outbox_layer, "Outbox Layer") {
+    Container(outbox_relay, "Outbox Relay / CDC", "Debezium/Polling", "Извлекает события из outbox-таблиц и публикует в Kafka", $tags="new")
+}
+
+' === EVENT BACKBONE ===
+System_Boundary(event_backbone, "Event Backbone") {
+    ContainerQueue(kafka, "Kafka Cluster", "Apache Kafka", "Доменные события, партиционирование по регионам", $tags="new")
+    Container(schema_registry, "Schema Registry", "Confluent/Apicurio", "Управление схемами Avro/Protobuf", $tags="new")
+    ContainerQueue(dlq, "DLQ Topics", "Kafka", "Dead Letter Queue для необработанных событий", $tags="new")
+    ContainerQueue(retry_topics, "Retry Topics", "Kafka", "Повторная обработка с backoff", $tags="new")
+}
+
+' === LEGACY QUEUE ===
+System_Boundary(legacy_queue, "Legacy Queue (Transitional)") {
+    ContainerQueue(rabbitmq, "RabbitMQ", "AMQP", "Celery задачи (переходный)", $tags="transitional")
+    Container(celery_workers, "Celery Workers", "Python", "Legacy фоновые задачи", $tags="transitional")
+}
+
+' === STREAM PROCESSING ===
+System_Boundary(stream_layer, "Stream Processing") {
+    Container(flink, "Flink Cluster", "Apache Flink", "Realtime: pricing features, fraud signals, analytics aggregates", $tags="new")
+    Container(kstreams, "Kafka Streams", "Java/Kotlin", "Лёгкая обработка внутри сервисов", $tags="new")
+}
+
+' === CONSUMERS ===
+System_Boundary(consumers, "Domain Services (Consumers)") {
+    Container(dispatch_svc, "Driver Assignment", "Python/Go", "Consumes: booking, pricing, driver events")
+    Container(notification_svc, "Notification Service", "Python/Go", "Consumes: все бизнес-события")
+    Container(analytics_ingest, "Analytics Ingestion", "Python/Go", "Consumes: все доменные события", $tags="new")
+}
+
+' === ANALYTICS ===
+System_Boundary(analytics_layer, "Analytics & BI") {
+    ContainerDb(clickhouse, "ClickHouse", "Analytics DB", "Аналитические данные")
+    Container(datalens, "DataLens", "BI Tool", "Визуализация отчётов")
+}
+
+' === MONITORING ===
+System_Boundary(monitoring_layer, "Observability Platform") {
+    Container(prometheus, "Prometheus", "Monitoring", "Метрики сервисов, Kafka, Flink, consumers", $tags="monitoring")
+    Container(grafana, "Grafana", "Dashboard", "Дашборды: lag, throughput, latency, DLQ", $tags="monitoring")
+    Container(loki, "Loki", "Log Aggregation", "Логи сервисов и consumers", $tags="monitoring")
+    Container(alertmanager, "Alertmanager", "Alert System", "Алерты: lag, DLQ, failures, disk", $tags="monitoring")
+    Container(kafka_exporter, "Kafka Exporter", "Prometheus Exporter", "Метрики Kafka кластера", $tags="new+monitoring")
+    Container(flink_metrics, "Flink Metrics Reporter", "Prometheus", "Метрики stream processing", $tags="new+monitoring")
+}
+
+' === EXTERNAL ===
+System_Ext(fcm, "FCM", "Push Android")
+System_Ext(apns, "APNs", "Push iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Push Huawei")
+
+Person(sre_engineer, "SRE инженер", "Мониторит платформу")
+
+' === СВЯЗИ: PRODUCERS → OUTBOX → KAFKA ===
+Rel(booking_svc, outbox_relay, "Outbox записи")
+Rel(driver_svc, outbox_relay, "Outbox записи")
+Rel(pricing_svc, outbox_relay, "Outbox записи")
+Rel(payments_svc, outbox_relay, "Outbox записи")
+Rel(payouts_svc, outbox_relay, "Outbox записи")
+Rel(fraud_svc, outbox_relay, "Outbox записи")
+Rel(outbox_relay, kafka, "Publish events")
+
+' === СВЯЗИ: SCHEMA ===
+Rel(outbox_relay, schema_registry, "Validate schema")
+Rel(kafka, schema_registry, "Schema lookup")
+
+' === СВЯЗИ: KAFKA → CONSUMERS ===
+Rel(kafka, dispatch_svc, "booking/pricing/driver events")
+Rel(kafka, payments_svc, "trip events")
+Rel(kafka, payouts_svc, "payment events")
+Rel(kafka, notification_svc, "business events")
+Rel(kafka, fraud_svc, "booking/payment events")
+Rel(kafka, pricing_svc, "booking/demand events")
+Rel(kafka, analytics_ingest, "all business events")
+
+' === СВЯЗИ: STREAM PROCESSING ===
+Rel(kafka, flink, "Event streams")
+Rel(flink, kafka, "Enriched events")
+Rel(flink, clickhouse, "Streaming aggregates")
+
+' === СВЯЗИ: ANALYTICS ===
+Rel(analytics_ingest, clickhouse, "ETL/Streaming insert")
+Rel(clickhouse, datalens, "SQL Queries")
+
+' === СВЯЗИ: NOTIFICATION → PUSH ===
+Rel(notification_svc, fcm, "Push Android")
+Rel(notification_svc, apns, "Push iOS")
+Rel(notification_svc, huawei_push, "Push Huawei")
+
+' === СВЯЗИ: RETRY/DLQ ===
+Rel(kafka, retry_topics, "Failed events")
+Rel(retry_topics, kafka, "Retry delivery")
+Rel(kafka, dlq, "Exhausted retries")
+
+' === СВЯЗИ: LEGACY ===
+Rel(rabbitmq, celery_workers, "AMQP tasks")
+
+' === СВЯЗИ: MONITORING ===
+Rel(kafka, kafka_exporter, "JMX Metrics")
+Rel(kafka_exporter, prometheus, "Scrape")
+Rel(flink, flink_metrics, "Metrics")
+Rel(flink_metrics, prometheus, "Scrape")
+Rel(booking_svc, prometheus, "App Metrics")
+Rel(dispatch_svc, prometheus, "App Metrics")
+Rel(notification_svc, prometheus, "App Metrics")
+Rel(analytics_ingest, prometheus, "App Metrics")
+Rel(prometheus, grafana, "PromQL")
+Rel(prometheus, alertmanager, "Alert Rules")
+Rel(alertmanager, sre_engineer, "Email/Slack/Pager")
+Rel(booking_svc, loki, "Logs")
+Rel(dispatch_svc, loki, "Logs")
+Rel(notification_svc, loki, "Logs")
+Rel(flink, loki, "Logs")
+Rel(loki, grafana, "LogQL")
+Rel(sre_engineer, grafana, "Мониторинг")
+
+@enduml

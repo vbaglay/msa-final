@@ -1,0 +1,136 @@
+@startuml C4_Data_Pipeline_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("new", $bgColor="#438DD5", $fontColor="white", $borderColor="#2E6295", $legendText="Новый элемент To-Be")
+AddElementTag("existing", $bgColor="#999999", $fontColor="white", $borderColor="#666666", $legendText="Существующий элемент (эволюция)")
+AddElementTag("ml", $bgColor="#8B008B", $fontColor="white", $borderColor="#6B006B", $legendText="ML Platform")
+
+title GoFuture — C4 Data Pipeline: микросервисы → ML-платформа → BI
+
+' === АКТОРЫ ===
+Person(manager, "Корпоративный менеджер", "Бизнес-отчёты")
+Person(accountant, "Бухгалтер", "Финансовые отчёты")
+Person(analyst, "Аналитик", "Data-driven решения")
+Person(data_engineer, "Data инженер", "Управление pipeline")
+
+' === SOURCES: DOMAIN SERVICES ===
+System_Boundary(sources, "Domain Services (Sources)") {
+    Container(booking_svc, "Booking Service", "Python/Go", "BookingCreated, TripCompleted...")
+    Container(driver_svc, "Driver Service", "Python/Go", "DriverLocationUpdated...")
+    Container(pricing_svc, "Pricing Service", "Python/Go", "PriceQuoted, SurgeUpdated...")
+    Container(payments_svc, "Payments Service", "Python/Go", "PaymentCaptured...")
+    Container(payouts_svc, "Payouts Service", "Python/Go", "PayoutCompleted...")
+    Container(fraud_svc, "Fraud Service", "Python/Go", "FraudCheckCompleted...")
+    Container(geography_svc, "Geography Service", "Python/Go", "ETAComputed...")
+}
+
+' === EVENT BACKBONE ===
+ContainerQueue(kafka, "Kafka", "Event Backbone", "Все доменные события")
+
+' === INGESTION ===
+System_Boundary(ingestion_layer, "Ingestion Layer") {
+    Container(analytics_ingest, "Analytics Ingestion", "Python/Go", "Валидация, нормализация, routing событий", $tags="new")
+}
+
+' === RAW STORAGE ===
+System_Boundary(raw_layer, "Raw Layer") {
+    ContainerDb(raw_storage, "Raw Event Storage", "Object Storage / Kafka LT", "Сырые события без трансформации", $tags="new")
+}
+
+' === STREAM PROCESSING ===
+System_Boundary(stream_layer, "Stream Processing") {
+    Container(flink, "Flink", "Apache Flink", "Realtime: aggregates, features, anomaly signals", $tags="existing")
+}
+
+' === BATCH PROCESSING ===
+System_Boundary(batch_layer, "Batch Processing") {
+    Container(spark, "Spark", "Apache Spark", "Historical marts, training datasets", $tags="existing")
+}
+
+' === CURATED STORAGE / SERVING ===
+System_Boundary(serving_layer, "Curated & Serving Layer") {
+    ContainerDb(clickhouse, "ClickHouse", "Analytics DB", "Витрины, агрегаты, feature tables", $tags="existing")
+    ContainerDb(feature_store, "Feature Store", "Online/Offline", "ML-features для scoring и training", $tags="new")
+}
+
+' === ML PLATFORM ===
+System_Boundary(ml_platform, "ML Platform") {
+    Container(ml_training, "Model Training", "MLflow / Kubeflow", "Обучение моделей", $tags="ml")
+    Container(ml_registry, "Model Registry", "MLflow", "Версионирование моделей", $tags="ml")
+    Container(ml_scoring_pricing, "Pricing ML Scoring", "gRPC/REST", "Инференс: surge prediction", $tags="ml")
+    Container(ml_scoring_fraud, "Fraud ML Scoring", "gRPC/REST", "Инференс: risk scoring", $tags="ml")
+    Container(ml_scoring_demand, "Demand Forecasting", "gRPC/REST", "Инференс: demand prediction", $tags="ml")
+}
+
+' === BI ===
+System_Boundary(bi_layer, "BI Layer") {
+    Container(datalens, "DataLens", "BI Tool", "Дашборды и отчёты", $tags="existing")
+}
+
+' === DATA QUALITY ===
+System_Boundary(quality_layer, "Data Quality") {
+    Container(quality_checks, "Quality Checks", "Monitoring", "Freshness, completeness, anomalies", $tags="new")
+    Container(schema_registry, "Schema Registry", "Avro/Protobuf", "Контроль схем событий", $tags="new")
+}
+
+' === SOURCES → KAFKA ===
+Rel(booking_svc, kafka, "Events")
+Rel(driver_svc, kafka, "Events")
+Rel(pricing_svc, kafka, "Events")
+Rel(payments_svc, kafka, "Events")
+Rel(payouts_svc, kafka, "Events")
+Rel(fraud_svc, kafka, "Events")
+Rel(geography_svc, kafka, "Events")
+
+' === KAFKA → INGESTION ===
+Rel(kafka, analytics_ingest, "All business events")
+Rel(analytics_ingest, schema_registry, "Validate schemas")
+
+' === INGESTION → RAW ===
+Rel(analytics_ingest, raw_storage, "Raw events")
+
+' === INGESTION → STREAM ===
+Rel(analytics_ingest, flink, "Validated events")
+
+' === STREAM → SERVING ===
+Rel(flink, clickhouse, "Streaming aggregates")
+Rel(flink, feature_store, "Online features")
+
+' === RAW → BATCH ===
+Rel(raw_storage, spark, "Historical data")
+
+' === BATCH → SERVING ===
+Rel(spark, clickhouse, "Curated marts")
+Rel(spark, feature_store, "Offline features")
+
+' === SERVING → ML ===
+Rel(feature_store, ml_training, "Training features")
+Rel(feature_store, ml_scoring_pricing, "Online features")
+Rel(feature_store, ml_scoring_fraud, "Online features")
+Rel(feature_store, ml_scoring_demand, "Online features")
+Rel(ml_training, ml_registry, "Register model")
+Rel(ml_registry, ml_scoring_pricing, "Deploy model")
+Rel(ml_registry, ml_scoring_fraud, "Deploy model")
+Rel(ml_registry, ml_scoring_demand, "Deploy model")
+
+' === ML → DOMAIN SERVICES ===
+Rel(ml_scoring_pricing, pricing_svc, "Surge/quote inputs")
+Rel(ml_scoring_fraud, fraud_svc, "Risk score")
+Rel(ml_scoring_demand, pricing_svc, "Demand forecast")
+
+' === SERVING → BI ===
+Rel(clickhouse, datalens, "SQL Queries")
+
+' === BI → USERS ===
+Rel(datalens, manager, "Бизнес-отчёты")
+Rel(datalens, accountant, "Финансовые отчёты")
+Rel(datalens, analyst, "Аналитические отчёты")
+
+' === DATA QUALITY ===
+Rel(quality_checks, clickhouse, "Check freshness/completeness")
+Rel(quality_checks, kafka, "Check event volumes")
+Rel(data_engineer, quality_checks, "Мониторинг качества")
+
+@enduml
