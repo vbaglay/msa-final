@@ -1,0 +1,122 @@
+@startuml C2_Multi_Region_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("new", $bgColor="#CC0000", $fontColor="white", $borderColor="#990000", $legendText="Новый элемент To-Be (красный)")
+AddElementTag("existing_evolved", $bgColor="#438DD5", $fontColor="white", $borderColor="#2E6295", $legendText="Существующий, эволюционировавший")
+
+title GoFuture — C2 Multi-Region Deployment
+
+' === ГЛОБАЛЬНЫЙ УРОВЕНЬ ===
+Person(user, "Пользователь", "Пассажир / Водитель")
+
+System_Boundary(global_layer, "Global Layer") {
+    Container(geodns, "GeoDNS / GSLB", "DNS + Health Checks", "Маршрутизация по геолокации и health", $tags="new")
+    Container(waf_global, "WAF / DDoS Protection", "Cloud WAF", "Фильтрация вредоносного трафика", $tags="new")
+    Container(iam_global, "IAM / Tenant Config", "OIDC/SAML", "Глобальный identity и tenant policy", $tags="new")
+}
+
+' === РЕГИОН: SINGAPORE ===
+System_Boundary(region_sg, "Region: Singapore (Primary SEA)") {
+    Container(edge_sg, "Regional Edge API", "API Gateway", "Auth, rate limiting, routing")
+    Container(services_sg, "Microservices", "Booking, Driver, Pricing, Payments...", "Полный набор бизнес-сервисов")
+    ContainerDb(db_sg, "PostgreSQL", "Primary", "Транзакционные данные SEA")
+    ContainerQueue(kafka_sg, "Kafka Cluster", "Regional", "Доменные события SEA")
+    ContainerDb(redis_sg, "Redis", "Cache", "Региональный кеш")
+    ContainerDb(es_sg, "Elasticsearch", "Geo Index", "Геопоиск водителей SEA")
+    Container(obs_sg, "Observability Agents", "Prometheus/Loki", "Региональные метрики и логи")
+}
+
+' === РЕГИОН: JAKARTA ===
+System_Boundary(region_jkt, "Region: Jakarta (Local SEA Cell)") {
+    Container(edge_jkt, "Regional Edge API", "API Gateway", "Auth, rate limiting, routing")
+    Container(services_jkt, "Microservices", "Booking, Driver, Pricing, Payments...", "Полный набор бизнес-сервисов")
+    ContainerDb(db_jkt, "PostgreSQL", "Primary", "Транзакционные данные Indonesia")
+    ContainerQueue(kafka_jkt, "Kafka Cluster", "Regional", "Доменные события Indonesia")
+    ContainerDb(redis_jkt, "Redis", "Cache", "Региональный кеш")
+    ContainerDb(es_jkt, "Elasticsearch", "Geo Index", "Геопоиск водителей Indonesia")
+    Container(obs_jkt, "Observability Agents", "Prometheus/Loki", "Региональные метрики и логи")
+}
+
+' === РЕГИОН: SÃO PAULO ===
+System_Boundary(region_gru, "Region: São Paulo (Primary South America)") {
+    Container(edge_gru, "Regional Edge API", "API Gateway", "Auth, rate limiting, routing")
+    Container(services_gru, "Microservices", "Booking, Driver, Pricing, Payments...", "Полный набор бизнес-сервисов")
+    ContainerDb(db_gru, "PostgreSQL", "Primary", "Транзакционные данные Brazil")
+    ContainerQueue(kafka_gru, "Kafka Cluster", "Regional", "Доменные события Brazil")
+    ContainerDb(redis_gru, "Redis", "Cache", "Региональный кеш")
+    ContainerDb(es_gru, "Elasticsearch", "Geo Index", "Геопоиск водителей Brazil")
+    Container(obs_gru, "Observability Agents", "Prometheus/Loki", "Региональные метрики и логи")
+}
+
+' === РЕГИОН: SANTIAGO ===
+System_Boundary(region_scl, "Region: Santiago (Secondary South America / DR)") {
+    Container(edge_scl, "Regional Edge API", "API Gateway", "Auth, rate limiting, routing")
+    Container(services_scl, "Microservices", "Booking, Driver, Pricing, Payments...", "Полный набор бизнес-сервисов")
+    ContainerDb(db_scl, "PostgreSQL", "Standby/Primary", "DR реплика или primary Chile")
+    ContainerQueue(kafka_scl, "Kafka Cluster", "Regional", "Доменные события Chile / Mirror")
+    ContainerDb(redis_scl, "Redis", "Cache", "Региональный кеш")
+    ContainerDb(es_scl, "Elasticsearch", "Geo Index", "Геопоиск водителей Chile")
+    Container(obs_scl, "Observability Agents", "Prometheus/Loki", "Региональные метрики и логи")
+}
+
+' === ЦЕНТРАЛЬНЫЙ МОНИТОРИНГ ===
+System_Boundary(central_obs, "Central Observability") {
+    Container(grafana_central, "Grafana", "Central Dashboard", "Глобальные дашборды всех регионов", $tags="existing_evolved")
+    Container(alertmanager_central, "Alertmanager", "Central Alerts", "Глобальные алерты", $tags="existing_evolved")
+}
+
+' === СВЯЗИ: ПОЛЬЗОВАТЕЛЬ → GLOBAL → REGION ===
+Rel(user, geodns, "DNS lookup")
+Rel(geodns, waf_global, "Routing")
+Rel(waf_global, edge_sg, "SEA traffic")
+Rel(waf_global, edge_jkt, "Indonesia traffic")
+Rel(waf_global, edge_gru, "Brazil traffic")
+Rel(waf_global, edge_scl, "Chile traffic")
+
+' === СВЯЗИ ВНУТРИ РЕГИОНОВ ===
+Rel(edge_sg, services_sg, "gRPC/REST")
+Rel(services_sg, db_sg, "R/W")
+Rel(services_sg, kafka_sg, "Publish/Consume events")
+Rel(services_sg, redis_sg, "Cache")
+Rel(services_sg, es_sg, "Geosearch")
+
+Rel(edge_jkt, services_jkt, "gRPC/REST")
+Rel(services_jkt, db_jkt, "R/W")
+Rel(services_jkt, kafka_jkt, "Publish/Consume events")
+Rel(services_jkt, redis_jkt, "Cache")
+Rel(services_jkt, es_jkt, "Geosearch")
+
+Rel(edge_gru, services_gru, "gRPC/REST")
+Rel(services_gru, db_gru, "R/W")
+Rel(services_gru, kafka_gru, "Publish/Consume events")
+Rel(services_gru, redis_gru, "Cache")
+Rel(services_gru, es_gru, "Geosearch")
+
+Rel(edge_scl, services_scl, "gRPC/REST")
+Rel(services_scl, db_scl, "R/W")
+Rel(services_scl, kafka_scl, "Publish/Consume events")
+Rel(services_scl, redis_scl, "Cache")
+Rel(services_scl, es_scl, "Geosearch")
+
+' === CROSS-REGION REPLICATION ===
+Rel(db_sg, db_jkt, "Async replica (paired DR)", $tags="new")
+Rel(db_gru, db_scl, "Async replica (paired DR)", $tags="new")
+Rel(kafka_sg, kafka_jkt, "MirrorMaker 2", $tags="new")
+Rel(kafka_gru, kafka_scl, "MirrorMaker 2", $tags="new")
+
+' === OBSERVABILITY ===
+Rel(obs_sg, grafana_central, "Metrics federation")
+Rel(obs_jkt, grafana_central, "Metrics federation")
+Rel(obs_gru, grafana_central, "Metrics federation")
+Rel(obs_scl, grafana_central, "Metrics federation")
+Rel(grafana_central, alertmanager_central, "Alert rules")
+
+' === IAM ===
+Rel(iam_global, edge_sg, "Auth policy")
+Rel(iam_global, edge_jkt, "Auth policy")
+Rel(iam_global, edge_gru, "Auth policy")
+Rel(iam_global, edge_scl, "Auth policy")
+
+@enduml

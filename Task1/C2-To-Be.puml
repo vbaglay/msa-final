@@ -1,0 +1,179 @@
+@startuml C2_To_Be_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("new", $bgColor="#438DD5", $fontColor="white", $borderColor="#2E6295", $legendText="Новый элемент To-Be")
+AddElementTag("transitional", $bgColor="#999999", $fontColor="white", $borderColor="#666666", $legendText="Переходный элемент")
+
+title GoFuture Platform — C2 To-Be (целевая контейнерная архитектура)
+
+' === АКТОРЫ ===
+Person(passenger, "Пассажир", "Заказывает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы и получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками")
+Person(accountant, "Бухгалтер", "Контролирует выплаты")
+Person(dev_engineer, "Разработчик", "Разрабатывает и деплоит сервисы")
+Person(sre_engineer, "SRE инженер", "Мониторит и поддерживает платформу")
+
+' === КЛИЕНТСКИЕ ПРИЛОЖЕНИЯ ===
+Container(app_passenger, "Пассажирское приложение", "iOS/Android/Huawei", "Интерфейс пассажира")
+Container(app_driver, "Водительское приложение", "iOS/Android/Huawei", "Интерфейс водителя")
+Container(web_portal, "Корпоративный портал", "Web Application", "Управление заказами")
+Container(admin_panel, "Админ-панель", "Web Application", "Управление выплатами")
+
+' === ПЛАТФОРМА ===
+System_Boundary(gf_platform, "GoFuture Platform To-Be") {
+
+    ' --- Edge ---
+    Container(edge_api, "Edge API / BFF", "API Gateway", "Маршрутизация, auth, rate limiting, совместимость", $tags="new")
+
+    ' --- Core Services ---
+    Container(booking_svc, "Booking Service", "Python/Go", "Жизненный цикл поездки", $tags="new")
+    ContainerDb(booking_db, "Booking DB", "PostgreSQL", "bookings, trip state", $tags="new")
+
+    Container(driver_svc, "Driver Service", "Python/Go", "Профиль и статус водителя", $tags="new")
+    ContainerDb(driver_db, "Driver DB", "PostgreSQL", "drivers, status", $tags="new")
+
+    Container(dispatch_svc, "Driver Assignment", "Python/Go", "Подбор и назначение водителя", $tags="new")
+    ContainerDb(dispatch_db, "Assignment DB", "PostgreSQL", "assignment state", $tags="new")
+
+    Container(pricing_svc, "Pricing Service", "Python/Go", "Ценообразование и surge", $tags="new")
+    ContainerDb(pricing_db, "Pricing DB", "PostgreSQL", "pricing rules, quotes", $tags="new")
+    ContainerDb(pricing_cache, "Pricing Cache", "Redis", "Кеш ценовых правил")
+
+    Container(payments_svc, "Payments Service", "Python/Go", "Авторизация и capture платежей", $tags="new")
+    ContainerDb(payments_db, "Payments DB", "PostgreSQL", "payments, invoices", $tags="new")
+
+    Container(payouts_svc, "Payouts Service", "Python/Go", "Расчёт и выплаты водителям", $tags="new")
+    ContainerDb(payouts_db, "Payouts DB", "PostgreSQL", "payouts, settlements", $tags="new")
+
+    Container(notification_svc, "Notification Service", "Python/Go", "Push/email/sms-уведомления", $tags="new")
+    ContainerDb(notification_db, "Notification DB", "PostgreSQL", "templates, device tokens", $tags="new")
+
+    Container(geography_svc, "Geography Service", "Python/Go", "Геопоиск, маршруты, ETA", $tags="new")
+    ContainerDb(geo_cache, "Geo Cache", "Redis", "Кеш геоданных")
+    ContainerDb(geo_search, "Geo Index", "Elasticsearch", "Геопоиск водителей")
+
+    Container(fraud_svc, "Fraud Service", "Python/Go", "Risk scoring и fraud detection", $tags="new")
+    ContainerDb(fraud_db, "Fraud DB", "PostgreSQL", "fraud cases, scores", $tags="new")
+
+    ' --- Event Backbone ---
+    ContainerQueue(kafka, "Kafka", "Event Backbone", "Доменные события", $tags="new")
+    ContainerQueue(rabbitmq, "RabbitMQ", "Legacy Queue", "Celery задачи (переходный)", $tags="transitional")
+
+    ' --- Analytics ---
+    Container(analytics_ingest, "Analytics Ingestion", "Python/Go", "Приём и валидация событий", $tags="new")
+    Container(stream_proc, "Stream Processing", "Flink", "Потоковая обработка")
+    ContainerDb(analytics_db, "Analytics DB", "ClickHouse", "Аналитические данные")
+    Container(datalens, "DataLens", "BI Tool", "Визуализация отчётов")
+
+    ' --- Observability ---
+    Container(prometheus, "Prometheus", "Monitoring", "Метрики сервисов и инфры")
+    Container(grafana, "Grafana", "Dashboard", "Визуализация метрик")
+    Container(loki, "Loki", "Log Aggregation", "Централизованные логи")
+    Container(alertmanager, "Alertmanager", "Alert System", "Управление алертами")
+
+    ' --- CI/CD ---
+    Container(jenkins, "Jenkins", "CI/CD", "Сборка и деплой сервисов")
+    Container(registry, "Docker Registry", "Artifacts", "Хранение образов")
+
+    ' --- Transitional ---
+    Container(monolith, "GoFuture Monolith", "Django", "Legacy (переходный период)", $tags="transitional")
+    ContainerDb(legacy_db, "Legacy DB", "PostgreSQL RDS", "Общие данные (сокращается)", $tags="transitional")
+}
+
+' === ВНЕШНИЕ СИСТЕМЫ ===
+System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+System_Ext(yandex_maps, "Яндекс Карты", "Картографический сервис")
+System_Ext(fcm, "FCM", "Push Android")
+System_Ext(apns, "APNs", "Push iOS")
+System_Ext(huawei_push, "Huawei Push Kit", "Push Huawei")
+System_Ext(bank_api, "API Банка", "Банковские выплаты")
+
+' === СВЯЗИ ПОЛЬЗОВАТЕЛЕЙ ===
+Rel(passenger, app_passenger, "Использует")
+Rel(driver, app_driver, "Использует")
+Rel(manager, web_portal, "Использует")
+Rel(accountant, admin_panel, "Использует")
+Rel(dev_engineer, jenkins, "Запускает сборки")
+Rel(sre_engineer, grafana, "Мониторит систему")
+Rel(sre_engineer, alertmanager, "Управляет алертами")
+
+' === КЛИЕНТЫ → EDGE ===
+Rel(app_passenger, edge_api, "REST API")
+Rel(app_driver, edge_api, "REST API")
+Rel(web_portal, edge_api, "REST API")
+Rel(admin_panel, edge_api, "REST API")
+
+' === EDGE → СЕРВИСЫ ===
+Rel(edge_api, booking_svc, "gRPC/REST")
+Rel(edge_api, driver_svc, "gRPC/REST")
+Rel(edge_api, pricing_svc, "gRPC/REST")
+Rel(edge_api, payments_svc, "gRPC/REST")
+Rel(edge_api, payouts_svc, "gRPC/REST")
+Rel(edge_api, monolith, "REST (legacy)", $tags="transitional")
+
+' === СЕРВИСЫ → ХРАНИЛИЩА ===
+Rel(booking_svc, booking_db, "R/W")
+Rel(driver_svc, driver_db, "R/W")
+Rel(dispatch_svc, dispatch_db, "R/W")
+Rel(pricing_svc, pricing_db, "R/W")
+Rel(pricing_svc, pricing_cache, "Cache")
+Rel(payments_svc, payments_db, "R/W")
+Rel(payouts_svc, payouts_db, "R/W")
+Rel(notification_svc, notification_db, "R/W")
+Rel(geography_svc, geo_cache, "Cache")
+Rel(geography_svc, geo_search, "Geosearch")
+Rel(fraud_svc, fraud_db, "R/W")
+Rel(monolith, legacy_db, "ORM")
+
+' === SYNC CALLS ===
+Rel(booking_svc, pricing_svc, "gRPC: запрос цены")
+Rel(booking_svc, geography_svc, "gRPC: ETA/маршрут")
+
+' === EVENTS ===
+Rel(booking_svc, kafka, "BookingCreated, TripCompleted...")
+Rel(driver_svc, kafka, "DriverLocationUpdated...")
+Rel(pricing_svc, kafka, "PriceQuoted, SurgeUpdated...")
+Rel(payments_svc, kafka, "PaymentCaptured...")
+Rel(payouts_svc, kafka, "PayoutCompleted...")
+Rel(fraud_svc, kafka, "FraudCheckCompleted...")
+
+Rel(kafka, dispatch_svc, "Consumes booking/driver events")
+Rel(kafka, payments_svc, "Consumes trip events")
+Rel(kafka, payouts_svc, "Consumes payment events")
+Rel(kafka, notification_svc, "Consumes business events")
+Rel(kafka, fraud_svc, "Consumes booking/payment events")
+Rel(kafka, analytics_ingest, "Consumes all business events")
+
+' === EXTERNAL INTEGRATIONS ===
+Rel(payments_svc, yandex_pay, "Платежи")
+Rel(payouts_svc, bank_api, "Выплаты")
+Rel(geography_svc, yandex_maps, "Геоданные")
+Rel(notification_svc, fcm, "Push Android")
+Rel(notification_svc, apns, "Push iOS")
+Rel(notification_svc, huawei_push, "Push Huawei")
+
+' === ANALYTICS ===
+Rel(analytics_ingest, stream_proc, "Потоковая обработка")
+Rel(stream_proc, analytics_db, "ETL")
+Rel(analytics_db, datalens, "SQL Queries")
+Rel(datalens, manager, "Бизнес-отчёты")
+Rel(datalens, accountant, "Финансовые отчёты")
+
+' === OBSERVABILITY ===
+Rel(booking_svc, prometheus, "Metrics")
+Rel(driver_svc, prometheus, "Metrics")
+Rel(payments_svc, prometheus, "Metrics")
+Rel(kafka, prometheus, "Kafka Exporter")
+Rel(prometheus, grafana, "PromQL")
+Rel(prometheus, alertmanager, "Alert Rules")
+Rel(booking_svc, loki, "Logs")
+Rel(driver_svc, loki, "Logs")
+Rel(payments_svc, loki, "Logs")
+
+' === CI/CD ===
+Rel(jenkins, registry, "Push/Pull images")
+
+@enduml

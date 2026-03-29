@@ -1,0 +1,78 @@
+@startuml C4_Failover_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("failed", $bgColor="#CC0000", $fontColor="white", $borderColor="#990000", $legendText="Отказавший компонент")
+AddElementTag("failover", $bgColor="#2D882D", $fontColor="white", $borderColor="#1A5C1A", $legendText="Failover-компонент (активирован)")
+AddElementTag("rerouted", $bgColor="#FF8C00", $fontColor="white", $borderColor="#CC7000", $legendText="Перенаправленный поток")
+
+title GoFuture — C4 Аварийное переключение (Failover Diagram)
+
+Person(user, "Пользователь", "Пассажир / Водитель")
+Person(sre, "SRE инженер", "Управление инцидентами")
+
+' === GLOBAL ===
+System_Boundary(global, "Global Layer") {
+    Container(geodns, "GeoDNS / GSLB", "Health-based routing", "Определяет healthy region")
+    Container(waf, "WAF", "Cloud WAF", "Фильтрация трафика")
+}
+
+' === REGION A — ОТКАЗ ===
+System_Boundary(region_a, "Region A: São Paulo (FAILURE)") {
+    Container(edge_a, "Edge API (A)", "API Gateway", "НЕДОСТУПЕН", $tags="failed")
+    Container(services_a, "Microservices (A)", "Booking, Driver...", "НЕДОСТУПНЫ", $tags="failed")
+    ContainerDb(db_a_primary, "PostgreSQL Primary (A)", "Primary", "НЕДОСТУПНА", $tags="failed")
+    ContainerQueue(kafka_a, "Kafka Cluster (A)", "Regional", "НЕДОСТУПЕН", $tags="failed")
+    Container(obs_a, "Observability (A)", "Prometheus/Loki", "Метрики до отказа")
+}
+
+' === REGION B — ПРИНИМАЕТ НАГРУЗКУ ===
+System_Boundary(region_b, "Region B: Santiago (FAILOVER ACTIVE)") {
+    Container(edge_b, "Edge API (B)", "API Gateway", "Принимает трафик Region A", $tags="failover")
+    Container(services_b, "Microservices (B)", "Booking, Driver...", "Обрабатывает запросы", $tags="failover")
+    ContainerDb(db_b_promoted, "PostgreSQL Promoted (B)", "Was Standby → Primary", "Promoted replica", $tags="failover")
+    ContainerQueue(kafka_b, "Kafka Cluster (B)", "Regional + Mirror", "Consumers resume from mirror", $tags="failover")
+    ContainerDb(redis_b, "Redis (B)", "Cache", "Cache warm-up in progress")
+    Container(obs_b, "Observability (B)", "Prometheus/Loki", "Полный мониторинг")
+}
+
+' === MONITORING ===
+System_Boundary(monitoring, "Central Observability") {
+    Container(grafana, "Grafana", "Dashboard", "Дашборд failover status")
+    Container(alertmanager, "Alertmanager", "Alerts", "Уведомление SRE")
+}
+
+' === ПОТОКИ ===
+
+' Пользователь → GeoDNS
+Rel(user, geodns, "DNS запрос")
+
+' GeoDNS определяет отказ Region A
+Rel(geodns, edge_a, "Health check: FAIL", $tags="failed")
+Rel(geodns, waf, "Reroute → Region B", $tags="rerouted")
+Rel(waf, edge_b, "Трафик перенаправлен", $tags="rerouted")
+
+' Region B обрабатывает
+Rel(edge_b, services_b, "gRPC/REST")
+Rel(services_b, db_b_promoted, "R/W (promoted primary)")
+Rel(services_b, kafka_b, "Publish/Consume events")
+Rel(services_b, redis_b, "Cache (warming up)")
+
+' DB promotion
+Rel(db_a_primary, db_b_promoted, "Was async replica → PROMOTED", $tags="failover")
+
+' Kafka mirror
+Rel(kafka_a, kafka_b, "MirrorMaker 2 (mirror data available)", $tags="failover")
+
+' Observability
+Rel(obs_a, grafana, "Last metrics before failure")
+Rel(obs_b, grafana, "Live metrics")
+Rel(obs_b, alertmanager, "Failover alerts")
+Rel(alertmanager, sre, "Incident notification: Email/Slack/Pager")
+
+' SRE actions
+Rel(sre, grafana, "Мониторинг failover")
+Rel(sre, db_b_promoted, "Подтверждение promotion (runbook)")
+
+@enduml

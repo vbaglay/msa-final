@@ -1,0 +1,118 @@
+@startuml C2_Multitenancy_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+AddElementTag("new", $bgColor="#438DD5", $fontColor="white", $borderColor="#2E6295", $legendText="Новый элемент To-Be")
+AddElementTag("iam", $bgColor="#8B008B", $fontColor="white", $borderColor="#6B006B", $legendText="IAM компонент")
+AddElementTag("monitoring", $bgColor="#2D882D", $fontColor="white", $borderColor="#1A5C1A", $legendText="Мониторинг")
+AddElementTag("onboarding", $bgColor="#FF8C00", $fontColor="white", $borderColor="#CC7000", $legendText="Onboarding pipeline")
+
+title GoFuture — C2 Мультитенантная платформа: IAM, Onboarding, Monitoring
+
+' === АКТОРЫ ===
+Person(platform_admin, "Platform Admin", "Управляет tenants и политиками")
+Person(partner_admin, "Partner Admin", "Администрирует свой tenant")
+Person(tenant_user, "Tenant User", "Пассажир/Водитель партнёра")
+Person(sre, "SRE инженер", "Мониторит мультитенантную среду")
+
+' === IAM & IDENTITY ===
+System_Boundary(iam_boundary, "IAM Platform") {
+    Container(iam_service, "IAM Service", "OIDC/SAML", "Authn/Authz, SSO, Service Identity", $tags="iam")
+    Container(policy_engine, "Policy Engine", "OPA/Custom", "RBAC/ABAC проверки, tenant policies", $tags="iam")
+    ContainerDb(identity_db, "Identity Store", "PostgreSQL", "Users, roles, policies, SSO configs", $tags="iam")
+}
+
+' === TENANT MANAGEMENT ===
+System_Boundary(tenant_mgmt, "Tenant Management") {
+    Container(partner_portal, "Partner Portal", "Web Application", "Регистрация и self-service для партнёров", $tags="new")
+    Container(admin_console, "Platform Admin Console", "Web Application", "Управление tenants, политиками", $tags="new")
+    Container(tenant_config, "Tenant Config Service", "Python/Go", "Tenant lifecycle, policies, config", $tags="new")
+    ContainerDb(tenant_config_db, "Tenant Config DB", "PostgreSQL", "Tenant records, tiers, regions, policies", $tags="new")
+}
+
+' === ONBOARDING PIPELINE ===
+System_Boundary(onboarding_pipeline, "Onboarding Pipeline") {
+    Container(provisioning, "Provisioning Orchestrator", "Python/Go", "Координация всех шагов provisioning", $tags="onboarding")
+    Container(db_provisioning, "DB Provisioning", "Automation", "Создание schema/database per tenant", $tags="onboarding")
+    Container(kafka_provisioning, "Kafka Provisioning", "Automation", "Настройка tenant metadata в topics", $tags="onboarding")
+    Container(secrets_provisioning, "Secrets Provisioning", "Vault/KMS", "Создание секретов и ключей", $tags="onboarding")
+    Container(integration_config, "Integration Config", "Automation", "Подключение платёжных/карт/push сервисов", $tags="onboarding")
+    Container(obs_provisioning, "Observability Setup", "Automation", "Tenant dashboards, alerts, log routing", $tags="onboarding")
+    Container(readiness_checks, "Readiness Checks", "Automated Tests", "Health, isolation, monitoring проверки", $tags="onboarding")
+}
+
+' === APPLICATION LAYER ===
+System_Boundary(app_layer, "Application Layer (Tenant-Aware)") {
+    Container(edge_api, "Edge API", "API Gateway", "Tenant-aware routing по tenant ID из токена")
+    Container(services, "Microservices", "Booking, Driver, Pricing...", "Tenant context обязателен")
+}
+
+' === DATA LAYER ===
+System_Boundary(data_layer, "Data Layer (Tenant-Isolated)") {
+    ContainerDb(tenant_db_standard, "Tenant DBs (Standard)", "PostgreSQL", "Schema-per-tenant в shared DB")
+    ContainerDb(tenant_db_premium, "Tenant DBs (Premium)", "PostgreSQL", "Database-per-tenant")
+    ContainerQueue(kafka, "Kafka", "Event Backbone", "tenantId в metadata каждого события")
+}
+
+' === MONITORING ===
+System_Boundary(monitoring_boundary, "Tenant-Aware Monitoring") {
+    Container(prometheus, "Prometheus", "Monitoring", "Tenant-level метрики", $tags="monitoring")
+    Container(grafana, "Grafana", "Dashboard", "Platform / Tenant / Onboarding дашборды", $tags="monitoring")
+    Container(loki, "Loki", "Log Aggregation", "Tenant-aware логи", $tags="monitoring")
+    Container(alertmanager, "Alertmanager", "Alerts", "Tenant-specific алерты", $tags="monitoring")
+    Container(billing_metrics, "Billing & Quota", "Custom", "Usage, spend, quotas per tenant", $tags="monitoring")
+}
+
+' === СВЯЗИ: PLATFORM ADMIN ===
+Rel(platform_admin, admin_console, "Управляет tenants")
+Rel(admin_console, tenant_config, "CRUD tenant policies")
+Rel(admin_console, iam_service, "Manage global identities")
+
+' === СВЯЗИ: PARTNER ADMIN ===
+Rel(partner_admin, partner_portal, "Регистрация / self-service")
+Rel(partner_portal, tenant_config, "Запрос создания tenant")
+Rel(partner_portal, iam_service, "SSO setup, user management")
+
+' === СВЯЗИ: ONBOARDING ===
+Rel(tenant_config, provisioning, "Trigger onboarding")
+Rel(provisioning, iam_service, "Identity provisioning")
+Rel(provisioning, db_provisioning, "Create DB/schema")
+Rel(provisioning, kafka_provisioning, "Setup tenant metadata")
+Rel(provisioning, secrets_provisioning, "Create secrets")
+Rel(provisioning, integration_config, "Setup integrations")
+Rel(provisioning, obs_provisioning, "Setup monitoring")
+Rel(provisioning, readiness_checks, "Run checks")
+Rel(readiness_checks, tenant_config, "Report readiness")
+
+Rel(db_provisioning, tenant_db_standard, "Create schema")
+Rel(db_provisioning, tenant_db_premium, "Create database")
+Rel(obs_provisioning, grafana, "Create tenant dashboards")
+Rel(obs_provisioning, alertmanager, "Create tenant alerts")
+
+' === СВЯЗИ: TENANT CONFIG ===
+Rel(tenant_config, tenant_config_db, "R/W")
+Rel(iam_service, identity_db, "R/W")
+Rel(iam_service, policy_engine, "Policy evaluation")
+
+' === СВЯЗИ: TENANT USER FLOW ===
+Rel(tenant_user, edge_api, "REST API")
+Rel(edge_api, iam_service, "Validate token + tenant")
+Rel(edge_api, policy_engine, "Check permissions")
+Rel(edge_api, services, "Route with tenant context")
+Rel(services, tenant_db_standard, "R/W (tenant schema)")
+Rel(services, tenant_db_premium, "R/W (tenant DB)")
+Rel(services, kafka, "Events with tenantId")
+
+' === СВЯЗИ: MONITORING ===
+Rel(services, prometheus, "Tenant-labeled metrics")
+Rel(services, loki, "Tenant-labeled logs")
+Rel(kafka, prometheus, "Event metrics per tenant")
+Rel(prometheus, grafana, "PromQL")
+Rel(prometheus, alertmanager, "Alert Rules")
+Rel(prometheus, billing_metrics, "Usage data")
+Rel(alertmanager, sre, "Incident notifications")
+Rel(sre, grafana, "Мониторинг: platform + tenant")
+Rel(loki, grafana, "LogQL")
+
+@enduml
